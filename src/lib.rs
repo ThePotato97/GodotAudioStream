@@ -1,13 +1,14 @@
 use gdnative::api::{AudioStreamGeneratorPlayback, AudioStreamPlayer};
 use gdnative::prelude::*;
-use regex::Regex;
-use rustube::{Id, Video};
 use std::collections::VecDeque;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::thread;
+use url::Url;
 
 #[derive(NativeClass)]
 #[inherit(Node)]
@@ -18,6 +19,26 @@ struct YTStream {
     audio_buffer: VecDeque<f32>,
     buffer_size: i32,
     buffer_threshold: usize,
+    yt_dlp: Option<Child>,       // Store the yt-dlp process
+    ffmpeg: Option<Child>,       // Store the ffmpeg process
+    current_url: Option<String>, // Store the current URL
+    is_paused: Arc<AtomicBool>,
+}
+
+fn sanitize_url(input: &str) -> Result<String, &'static str> {
+    // Attempt to parse the URL
+    match Url::parse(input) {
+        Ok(url) => {
+            // You can further validate the scheme if needed
+            if url.scheme() == "http" || url.scheme() == "https" {
+                // Return the URL as a string
+                Ok(url.to_string())
+            } else {
+                Err("Invalid URL scheme")
+            }
+        }
+        Err(_) => Err("Invalid URL"),
+    }
 }
 
 #[methods]
@@ -30,7 +51,11 @@ impl YTStream {
             buffer_size: 4096,
             audio_data_rx: None,
             audio_buffer: VecDeque::new(),
-            buffer_threshold: 44100 * 1, // Buffer 5 seconds of audio
+            buffer_threshold: 44100 * 5, // Buffer 5 seconds of audio
+            yt_dlp: None,
+            ffmpeg: None,
+            current_url: None,
+            is_paused: Arc::new(AtomicBool::new(false)),
         }
     }
     #[method]
@@ -53,22 +78,78 @@ impl YTStream {
     }
 
     #[method]
-    fn play_youtube_audio(&mut self, #[base] _owner: &Node, url: String) -> bool {
+    fn pause(&mut self, #[base] _owner: &Node) {
+        self.is_paused.store(true, Ordering::Relaxed);
+        if let Some(player) = self.player.as_ref() {
+            unsafe {
+                player.assume_safe().stop();
+            }
+        }
+    }
+
+    #[method]
+    fn resume(&mut self, #[base] _owner: &Node) {
+        self.is_paused.store(false, Ordering::Relaxed);
+        if let Some(player) = self.player.as_ref() {
+            unsafe {
+                player.assume_safe().play(0.0);
+            }
+        }
+    }
+
+    #[method]
+    fn stop(&mut self, #[base] _owner: &Node) {
+        //Kill Child processes
+        if let Some(mut yt_dlp) = self.yt_dlp.take() {
+            let _ = yt_dlp.kill(); // attempt to kill the process
+            let _ = yt_dlp.wait(); //  wait for it to exit.
+        }
+        if let Some(mut ffmpeg) = self.ffmpeg.take() {
+            let _ = ffmpeg.kill();
+            let _ = ffmpeg.wait();
+        }
+
+        self.is_paused.store(false, Ordering::Relaxed);
+        self.audio_data_rx = None;
+        self.audio_buffer.clear();
+        self.current_url = None;
+
+        if let Some(player) = self.player.as_ref() {
+            unsafe {
+                player.assume_safe().stop();
+            }
+        }
+    }
+
+    #[method]
+    fn play_youtube_audio(&mut self, #[base] owner: &Node, url: String) -> bool {
         if self.playback.is_none() {
             godot_print!("AudioStreamGeneratorPlayback not initialized");
             return false;
         }
 
+        let is_paused_clone = self.is_paused.clone();
+
+        let sanitized_url = match sanitize_url(&url) {
+            Ok(url) => url,
+            Err(err) => {
+                godot_error!("Invalid URL: {}", err);
+                return false;
+            }
+        };
+
+        self.stop(owner);
+
         let (tx, rx) = channel::<Vec<f32>>();
         self.audio_data_rx = Some(rx);
 
-        godot_print!("Playing audio from: {}", url);
+        godot_print!("Playing audio from: {}", sanitized_url);
 
         godot_print!("Starting audio thread");
         thread::spawn(move || {
             // Start yt-dlp process
             let mut yt_dlp = Command::new("yt-dlp")
-                .args(["-o", "-", &url])
+                .args(["-f", "bestaudio/best", "-o", "-", &sanitized_url])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
@@ -76,6 +157,7 @@ impl YTStream {
                 .expect("Failed to start yt-dlp");
 
             godot_print!("yt-dlp started");
+
             // Start ffmpeg process configured for raw PCM output
 
             let mut ffmpeg = Command::new("ffmpeg")
@@ -116,7 +198,12 @@ impl YTStream {
             let mut buffer = vec![0u8; 4096 * 4]; // Space for 4096 f32 samples
 
             godot_print!("Reading PCM data from ffmpeg");
+
             loop {
+                if is_paused_clone.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(10)); // Check pause state periodically
+                    continue;
+                }
                 match ffmpeg_output.read(&mut buffer) {
                     Ok(n) if n == 0 => break, // End of stream
                     Ok(n) => {
@@ -198,6 +285,7 @@ impl YTStream {
     }
 }
 
+// boilerplate code to register panic hook
 pub fn init_panic_hook() {
     // To enable backtrace, you will need the `backtrace` crate to be included in your cargo.toml, or
     // a version of Rust where backtrace is included in the standard library (e.g. Rust nightly as of the date of publishing)
