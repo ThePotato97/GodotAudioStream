@@ -20,20 +20,6 @@ struct YTStream {
     buffer_threshold: usize,
 }
 
-async fn get_playback_url(url: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    let youtube_regex = Regex::new(r"(https?://)?(www\.)?(youtube|youtu\.be)(\.com)?/.+")?;
-    if youtube_regex.is_match(url) {
-        let id = Id::from_raw(&url)?;
-
-        let video: Video = Video::from_id(id.into_owned()).await?;
-
-        let best_audio = video.best_audio().unwrap();
-
-        return Ok(Some(best_audio.signature_cipher.url.to_string()));
-    }
-    Ok(Some(url.to_string()))
-}
-
 #[methods]
 impl YTStream {
     fn new(_owner: &Node) -> Self {
@@ -55,10 +41,12 @@ impl YTStream {
     ) {
         self.playback = Some(stream)
     }
+
     #[method]
     fn set_audio_player(&mut self, #[base] _owner: &Node, stream: Ref<AudioStreamPlayer>) {
         self.player = Some(stream)
     }
+
     #[method]
     fn _ready(&mut self, #[base] _owner: &Node) {
         godot_print!("YTStream ready")
