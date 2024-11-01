@@ -1,5 +1,3 @@
-use ffmpeg_next::format::sample::Sample;
-use ffmpeg_next::{codec, format};
 use gdnative::api::{AudioStreamGeneratorPlayback, AudioStreamPlayer};
 use gdnative::prelude::*;
 use regex::Regex;
@@ -122,7 +120,7 @@ impl YTStream {
             // Pipe yt-dlp to ffmpeg
             godot_print!("Starting yt-dlp to ffmpeg pipe");
             thread::spawn(move || {
-                std::io::copy(&mut yt_dlp_output, &mut input)
+                std::io::copy(&mut yt_dlp_output, &mut ffmpeg_input)
                     .expect("Failed to pipe yt-dlp to ffmpeg");
             });
 
@@ -255,7 +253,6 @@ pub fn init_panic_hook() {
 fn init(handle: InitHandle) {
     handle.add_class::<YTStream>();
     init_panic_hook();
-    ffmpeg_next::init().expect("Failed to initialize ffmpeg");
 }
 
 godot_init!(init);
