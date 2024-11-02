@@ -125,32 +125,6 @@ impl YTStream {
         }
     }
 
-    // #[method]
-    // fn stop(&mut self, #[base] _owner: &Node) {
-    //     //Kill Child processes
-    //     // this is arc and mutex, so we need to lock it
-    //     if let Some(mut yt_dlp) = self.yt_dlp.lock().unwrap().take() {
-    //         let _ = yt_dlp.kill(); // attempt to kill the process
-    //         let _ = yt_dlp.wait(); //  wait for it to exit.
-    //     }
-    //     // this is arc and mutex, so we need to lock it
-    //     if let Some(mut ffmpeg) = self.ffmpeg.lock().unwrap().take() {
-    //         let _ = ffmpeg.kill(); // attempt to kill the process
-    //         let _ = ffmpeg.wait(); //  wait for it to exit.
-    //     }
-
-    //     self.is_paused.store(false, Ordering::Relaxed);
-    //     self.audio_data_rx = None;
-    //     self.audio_buffer.clear();
-    //     self.current_url = None;
-
-    //     if let Some(player) = self.player.as_ref() {
-    //         unsafe {
-    //             player.assume_safe().stop();
-    //         }
-    //     }
-    // }
-
     #[method]
     fn stop(&mut self, #[base] _owner: &Node) {
         // 1. Signal the audio thread to stop
