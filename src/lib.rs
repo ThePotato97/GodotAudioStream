@@ -1,13 +1,16 @@
+mod download_ffmpeg;
+mod download_yt_dlp;
+
 use gdnative::api::{AudioStreamGeneratorPlayback, AudioStreamPlayer};
 use gdnative::prelude::*;
 use std::collections::VecDeque;
-use std::f32::consts::E;
 use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use url::Url;
 
@@ -20,6 +23,8 @@ struct YTStream {
     player: Option<Ref<AudioStreamPlayer>>,
     audio_data_rx: Option<Receiver<Vec<f32>>>,
     ffmpeg_tx: Option<Sender<Vec<u8>>>,
+    stop_tx: Option<Sender<()>>,
+    root_path: Option<PathBuf>,
     audio_buffer: VecDeque<f32>,
     buffer_size: i32,
     buffer_threshold: usize,
@@ -27,13 +32,12 @@ struct YTStream {
     is_paused: Arc<AtomicBool>,
 }
 
+// Check if the URL is valid
 fn sanitize_url(input: &str) -> Result<String, &'static str> {
-    // Attempt to parse the URL
     match Url::parse(input) {
         Ok(url) => {
-            // You can further validate the scheme if needed
+            // Validate the scheme
             if url.scheme() == "http" || url.scheme() == "https" {
-                // Return the URL as a string
                 Ok(url.to_string())
             } else {
                 Err("Invalid URL scheme")
@@ -49,16 +53,39 @@ impl YTStream {
         godot_print!("YTStream new");
         YTStream {
             playback: None,
+            root_path: None,
             player: None,
             buffer_size: 4096,
             audio_data_rx: None,
             ffmpeg_tx: None,
+            stop_tx: None,
             audio_buffer: VecDeque::new(),
             buffer_threshold: 44100 * 5, // Buffer 5 seconds of audio
             current_url: None,
             is_paused: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    #[method]
+    fn set_root_path(&mut self, #[base] _owner: &Node, path: GodotString) {
+        self.root_path = Some(PathBuf::from(path.to_string()));
+        self._start_ffmpeg();
+    }
+
+    #[method]
+    fn download_deps(&mut self, #[base] _owner: &Node) {
+        if let Some(root_path) = &self.root_path {
+            if let Err(e) = download_ffmpeg::download_ffmpeg(root_path) {
+                godot_error!("Error downloading ffmpeg: {}", e);
+            }
+            if let Err(e) = download_yt_dlp::download_yt_dlp(root_path) {
+                godot_error!("Error downloading yt-dlp: {}", e);
+            }
+        } else {
+            godot_error!("Root path not set");
+        }
+    }
+
     #[method]
     fn set_audio_stream(
         &mut self,
@@ -76,7 +103,6 @@ impl YTStream {
     #[method]
     fn _ready(&mut self, #[base] _owner: &Node) {
         godot_print!("YTStream ready");
-        self._start_ffmpeg();
     }
 
     #[method]
@@ -126,135 +152,179 @@ impl YTStream {
     // }
 
     #[method]
+    fn stop(&mut self, #[base] _owner: &Node) {
+        // 1. Signal the audio thread to stop
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(()); // Send the stop signal
+        }
+
+        // 3. Reset state
+        self.is_paused.store(false, Ordering::Relaxed);
+        self.audio_data_rx = None;
+        self.audio_buffer.clear();
+        self.current_url = None;
+
+        if let Some(player) = self.player.as_ref() {
+            unsafe {
+                player.assume_safe().stop();
+            }
+        }
+    }
+
+    #[method]
     fn _start_ffmpeg(&mut self) {
-        let (tx, rx) = channel::<Vec<f32>>();
-        self.audio_data_rx = Some(rx);
+        if let Some(root_path) = &self.root_path {
+            let (tx, rx) = channel::<Vec<f32>>();
+            self.audio_data_rx = Some(rx);
 
-        let (ffmpeg_tx, ffmpeg_rx) = channel::<Vec<u8>>();
-        self.ffmpeg_tx = Some(ffmpeg_tx);
+            let (ffmpeg_tx, ffmpeg_rx) = channel::<Vec<u8>>();
+            self.ffmpeg_tx = Some(ffmpeg_tx);
 
-        let is_paused_clone = Arc::clone(&self.is_paused);
+            let is_paused_clone = Arc::clone(&self.is_paused);
+            let root_path_clone = root_path.clone();
+            thread::spawn(move || {
+                let mut ffmpeg = Command::new("ffmpeg")
+                    .args([
+                        "-i",
+                        "pipe:0",
+                        "-f",
+                        "f32le", // 32-bit float PCM
+                        "-acodec",
+                        "pcm_f32le",
+                        "-ar",
+                        "44100", // Sample rate
+                        "-ac",
+                        "2", // Stereo
+                        "pipe:1",
+                    ])
+                    .current_dir(root_path_clone)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW) // CREATE_NO_WINDOW
+                    .spawn()
+                    .expect("Failed to start ffmpeg");
 
-        godot_print!("Starting ffmpeg");
-        thread::spawn(move || {
-            let mut ffmpeg = Command::new("ffmpeg")
-                .args([
-                    "-i",
-                    "pipe:0",
-                    "-f",
-                    "f32le", // 32-bit float PCM
-                    "-acodec",
-                    "pcm_f32le",
-                    "-ar",
-                    "44100", // Sample rate
-                    "-ac",
-                    "2", // Stereo
-                    "pipe:1",
-                ])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW) // CREATE_NO_WINDOW
-                .spawn()
-                .expect("Failed to start ffmpeg");
+                let mut ffmpeg_stdout = ffmpeg.stdout.take().unwrap();
+                let mut ffmpeg_stdin = ffmpeg.stdin.take().unwrap();
 
-            let mut ffmpeg_stdout = ffmpeg.stdout.take().unwrap();
-            let mut ffmpeg_stdin = ffmpeg.stdin.take().unwrap();
+                // Read PCM data from ffmpeg
+                let mut buffer = vec![0u8; 4096 * 4]; // Space for 4096 f32 samples
 
-            // Read PCM data from ffmpeg
-            let mut buffer = vec![0u8; 4096 * 4]; // Space for 4096 f32 samples
-
-            thread::spawn(move || loop {
-                if is_paused_clone.load(Ordering::Relaxed) {
-                    std::thread::sleep(std::time::Duration::from_millis(10)); // Check pause state periodically
-                    continue;
-                }
-
-                if let Ok(raw_audio) = ffmpeg_rx.recv() {
-                    godot_print!("Received {} bytes from ffmpeg_rx", raw_audio.len());
-                    if ffmpeg_stdin.write_all(&raw_audio).is_err() {
-                        godot_error!("Failed to write to ffmpeg");
-                        break;
+                thread::spawn(move || loop {
+                    if is_paused_clone.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(10)); // Check pause state periodically
+                        continue;
                     }
-                }
-            });
 
-            thread::spawn(move || loop {
-                match ffmpeg_stdout.read(&mut buffer) {
-                    Ok(n) if n == 0 => {
-                        godot_print!("ffmpeg_stdout.read() returned 0");
-                    }
-                    Ok(n) => {
-                        // Convert bytes to f32
-                        let samples = unsafe {
-                            std::slice::from_raw_parts(buffer.as_ptr() as *const f32, n / 4)
-                                .to_vec()
-                        };
-
-                        if tx.send(samples).is_err() {
-                            // Handle send errors (e.g., receiver disconnected)
-                            godot_error!("Error sending samples to audio thread");
+                    if let Ok(raw_audio) = ffmpeg_rx.recv() {
+                        godot_print!("Received {} bytes from ffmpeg_rx", raw_audio.len());
+                        if ffmpeg_stdin.write_all(&raw_audio).is_err() {
+                            godot_error!("Failed to write to ffmpeg");
                             break;
                         }
                     }
-                    Err(e) => {
-                        godot_error!("Error reading from ffmpeg: {}", e); // Handle errors!
+                });
+
+                thread::spawn(move || loop {
+                    match ffmpeg_stdout.read(&mut buffer) {
+                        Ok(n) if n == 0 => {
+                            godot_print!("ffmpeg_stdout.read() returned 0");
+                        }
+                        Ok(n) => {
+                            // Convert bytes to f32
+                            let samples = unsafe {
+                                std::slice::from_raw_parts(buffer.as_ptr() as *const f32, n / 4)
+                                    .to_vec()
+                            };
+
+                            if tx.send(samples).is_err() {
+                                // Handle send errors (e.g., receiver disconnected)
+                                godot_error!("Error sending samples to audio thread");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            godot_error!("Error reading from ffmpeg: {}", e); // Handle errors!
+                        }
                     }
-                }
+                });
             });
-        });
+        } else {
+            godot_error!("Root path not set");
+        }
     }
 
     #[method]
     fn play_youtube_audio(&mut self, #[base] _owner: &Node, url: String) -> bool {
-        if self.playback.is_none() {
-            godot_print!("AudioStreamGeneratorPlayback not initialized");
-            return false;
-        }
-
-        let sanitized_url = match sanitize_url(&url) {
-            Ok(url) => url,
-            Err(err) => {
-                godot_error!("Invalid URL: {}", err);
+        if let Some(root_path) = &self.root_path {
+            if self.playback.is_none() {
+                godot_print!("AudioStreamGeneratorPlayback not initialized");
                 return false;
             }
-        };
 
-        self.current_url = Some(sanitized_url.clone());
-        // self.stop(owner);
-
-        let ffmpeg_tx_clone = self.ffmpeg_tx.clone();
-        godot_print!("Playing audio from: {}", sanitized_url);
-
-        godot_print!("Starting audio thread");
-        thread::spawn(move || {
-            // Start yt-dlp process
-            let mut yt_dlp: Child = Command::new("yt-dlp")
-                .args(["-f", "bestaudio/best", "-o", "-", &sanitized_url])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-                .expect("Failed to start yt-dlp");
-
-            let mut yt_dlp_output = yt_dlp.stdout.take().unwrap();
-
-            let mut buffer = vec![0u8; 4096 * 4]; // Space for 4096 f32 samples
-
-            while let Ok(bytes_read) = yt_dlp_output.read(&mut buffer) {
-                if bytes_read == 0 {
-                    break;
+            let sanitized_url = match sanitize_url(&url) {
+                Ok(url) => url,
+                Err(err) => {
+                    godot_error!("Invalid URL: {}", err);
+                    return false;
                 }
-                godot_print!("Read {} bytes from yt-dlp", bytes_read);
-                if let Some(tx) = ffmpeg_tx_clone.as_ref() {
-                    if tx.send(buffer[0..bytes_read].to_vec()).is_err() {
-                        godot_error!("Error sending data to ffmpeg thread");
+            };
+
+            godot_print!("Sanitized URL: {}", sanitized_url);
+
+            self.current_url = Some(sanitized_url.clone());
+            // self.stop(owner);
+
+            let ffmpeg_tx_clone = self.ffmpeg_tx.clone();
+            godot_print!("Playing audio from: {}", sanitized_url);
+
+            godot_print!("Starting audio thread");
+
+            let (stop_tx, stop_rx) = channel::<()>();
+            self.stop_tx = Some(stop_tx);
+
+            let root_path_clone = root_path.clone();
+            thread::spawn(move || {
+                // Start yt-dlp process
+                let mut yt_dlp: Child = Command::new("yt-dlp")
+                    .args(["-f", "bestaudio/best", "-o", "-", &sanitized_url])
+                    .current_dir(root_path_clone)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn()
+                    .expect("Failed to start yt-dlp");
+
+                let mut yt_dlp_output = yt_dlp.stdout.take().unwrap();
+
+                let mut buffer = vec![0u8; 4096 * 4]; // Space for 4096 f32 samples
+
+                while let Ok(bytes_read) = yt_dlp_output.read(&mut buffer) {
+                    if bytes_read == 0 {
                         break;
                     }
+                    godot_print!("Read {} bytes from yt-dlp", bytes_read);
+
+                    if let Ok(()) = stop_rx.try_recv() {
+                        yt_dlp.kill().expect("Failed to kill yt-dlp");
+                        godot_print!("Received stop signal");
+                        break;
+                    }
+
+                    if let Some(tx) = ffmpeg_tx_clone.as_ref() {
+                        if tx.send(buffer[0..bytes_read].to_vec()).is_err() {
+                            godot_error!("Error sending data to ffmpeg thread");
+                            break;
+                        }
+                    }
                 }
-            }
-        });
-        true
+            });
+            true
+        } else {
+            godot_error!("play_youtube_audio root path not set");
+            false
+        }
     }
 
     #[method]
