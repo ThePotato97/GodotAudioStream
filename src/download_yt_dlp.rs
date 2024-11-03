@@ -7,9 +7,7 @@ use std::{
 
 use gdnative::godot_print;
 
-const YT_DLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
-
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+use crate::{CREATE_NO_WINDOW, YT_DLP_URL};
 
 pub fn is_yt_dlp_installed(output_dir: impl AsRef<Path>) -> bool {
     output_dir.as_ref().join("yt-dlp.exe").exists()

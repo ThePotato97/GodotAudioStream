@@ -4,7 +4,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z";
+use crate::FFMPEG_URL;
 
 pub fn download_ffmpeg(output_dir: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     // check if ffmpeg is already extracted
