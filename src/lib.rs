@@ -56,35 +56,19 @@ impl YTStream {
         }
     }
 
-    fn set_player_internal(&mut self, new_player: AudioPlayer) -> Result<(), StreamError> {
+    #[method]
+    fn set_player(&mut self, #[base] _owner: &Node, player: AudioPlayer) -> bool {
         // Stop any existing playback
-        if let Some(current_player) = &self.player {
-            current_player.stop()?;
-        }
-        self.player = Some(new_player);
-        Ok(())
-    }
-
-    #[method]
-    fn set_player_2d(&mut self, #[base] _owner: &Node, player: Ref<AudioStreamPlayer>) -> bool {
-        match self.set_player_internal(AudioPlayer::Player2D(player)) {
-            Ok(_) => true,
-            Err(e) => {
-                godot_error!("Failed to set 2D player: {}", e);
-                false
+        if let Some(ref current_player) = &self.player {
+            if let Err(e) = current_player.stop() {
+                godot_error!("Failed to stop current player: {}", e);
+                return false;
             }
         }
-    }
 
-    #[method]
-    fn set_player_3d(&mut self, #[base] _owner: &Node, player: Ref<AudioStreamPlayer3D>) -> bool {
-        match self.set_player_internal(AudioPlayer::Player3D(player)) {
-            Ok(_) => true,
-            Err(e) => {
-                godot_error!("Failed to set 3D player: {}", e);
-                false
-            }
-        }
+        // Set the new player
+        self.player = Some(player);
+        true // Successfully set the player
     }
 
     #[method]
@@ -154,15 +138,15 @@ impl YTStream {
     }
 
     fn process_internal(&mut self) -> Result<(), StreamError> {
-        let playback = self
+        let playback: &Ref<AudioStreamGeneratorPlayback> = self
             .playback
             .as_ref()
-            .ok_or(StreamError::PlayerNotInitialized)?;
+            .ok_or(StreamError::AudioStreamGeneratorPlaybackNotInitialized)?;
 
-        let player = self
+        let player: &AudioPlayer = self
             .player
             .as_ref()
-            .ok_or(StreamError::PlayerNotInitialized)?;
+            .ok_or(StreamError::AudioPlayerNotInitialized)?;
 
         if let Some(rx) = &self.audio_rx {
             // Fill buffer

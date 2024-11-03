@@ -51,3 +51,31 @@ impl AudioPlayer {
         }
     }
 }
+
+impl FromVariant for AudioPlayer {
+    fn from_variant(variant: &Variant) -> Result<Self, FromVariantError> {
+        // Check if the variant is an AudioStreamPlayer
+        if let Ok(player) = variant.try_to_object::<AudioStreamPlayer>() {
+            return Ok(AudioPlayer::Player2D(player));
+        }
+
+        // Then try to convert to AudioStreamPlayer3D
+        if let Ok(player) = variant.try_to_object::<AudioStreamPlayer3D>() {
+            return Ok(AudioPlayer::Player3D(player));
+        }
+
+        // If neither conversion worked, return an error
+        Err(FromVariantError::Custom(String::from(
+            "Variant is not an AudioStreamPlayer or AudioStreamPlayer3D",
+        )))
+    }
+}
+
+impl ToVariant for AudioPlayer {
+    fn to_variant(&self) -> Variant {
+        match self {
+            AudioPlayer::Player2D(player) => player.to_variant(),
+            AudioPlayer::Player3D(player) => player.to_variant(),
+        }
+    }
+}

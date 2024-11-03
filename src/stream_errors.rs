@@ -10,8 +10,11 @@ pub enum StreamError {
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
 
-    #[error("Player not initialized")]
-    PlayerNotInitialized,
+    #[error("AudioPlayer not initialized")]
+    AudioPlayerNotInitialized,
+
+    #[error("AudioStreamGeneratorPlayback not initialized")]
+    AudioStreamGeneratorPlaybackNotInitialized,
 
     #[error("Root path not set")]
     RootPathNotSet,
