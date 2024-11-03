@@ -1,11 +1,14 @@
 {
     "cSpell.words": [
+        "acodec",
+        "bestaudio",
         "Deque",
+        "descrambler",
         "gdnative",
-        "ictx",
-        "octx",
         "reqwest",
-        "rodio",
-        "rustube"
+        "sevenz",
+        "thiserror",
+        "walkdir",
+        "ytdlp"
     ]
 }
