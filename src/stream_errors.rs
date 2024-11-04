@@ -21,4 +21,7 @@ pub enum StreamError {
 
     #[error("Failed to download ffmpeg")]
     FfmpegDownloadError(String),
+
+    #[error("Invalid player")]
+    InvalidPlayer,
 }

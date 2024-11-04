@@ -9,15 +9,15 @@ use audio_player::AudioPlayer;
 use audio_processor::AudioProcessor;
 use gdnative::api::AudioStreamGeneratorPlayback;
 use gdnative::prelude::*;
-use process_manager::ProcessManager;
-use stream_errors::StreamError;
 
+use process_manager::ProcessManager;
+use std::backtrace::Backtrace;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-
+use stream_errors::StreamError;
 use url::Url;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -195,6 +195,10 @@ impl YTStream {
                 if let (Some(playback), Some(player)) =
                     (playback_lock.as_ref(), player_lock.as_ref())
                 {
+                    if !player.is_safe() {
+                        break;
+                    }
+
                     // Fill buffer
                     while let Ok(samples) = rx.try_recv() {
                         processor.buffer.extend(samples);
@@ -237,13 +241,6 @@ impl YTStream {
             while rx.try_recv().is_ok() {}
         }
 
-        // clear playback buffer
-        if let Some(playback) = &*self.playback.lock().unwrap() {
-            unsafe {
-                playback.assume_safe().clear_buffer();
-            }
-        }
-
         self.current_url = None;
         self.is_paused.store(false, Ordering::Relaxed);
     }
@@ -251,8 +248,50 @@ impl YTStream {
     // TODO: Add other necessary methods (pause, resume, etc.)
 }
 
+pub fn init_panic_hook() {
+    // To enable backtrace, you will need the `backtrace` crate to be included in your cargo.toml, or
+    // a version of Rust where backtrace is included in the standard library (e.g. Rust nightly as of the date of publishing)
+    // use backtrace::Backtrace;
+    // use std::backtrace::Backtrace;
+    let old_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let loc_string;
+        if let Some(location) = panic_info.location() {
+            loc_string = format!("file '{}' at line {}", location.file(), location.line());
+        } else {
+            loc_string = "unknown location".to_owned()
+        }
+
+        let error_message;
+        if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            error_message = format!("[RUST] {}: panic occurred: {:?}", loc_string, s);
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            error_message = format!("[RUST] {}: panic occurred: {:?}", loc_string, s);
+        } else {
+            error_message = format!("[RUST] {}: unknown panic occurred", loc_string);
+        }
+        godot_error!("{}", error_message);
+        // Uncomment the following line if backtrace crate is included as a dependency
+        godot_error!("Backtrace:\n{:?}", Backtrace::capture());
+
+        (*(old_hook.as_ref()))(panic_info);
+
+        unsafe {
+            if let Some(gd_panic_hook) =
+                gdnative::api::utils::autoload::<gdnative::api::Node>("rust_panic_hook")
+            {
+                gd_panic_hook.call(
+                    "rust_panic_hook",
+                    &[GodotString::from_str(error_message).to_variant()],
+                );
+            }
+        }
+    }));
+}
+
 fn init(handle: InitHandle) {
     handle.add_class::<YTStream>();
+    init_panic_hook();
 }
 
 godot_init!(init);

@@ -11,6 +11,9 @@ pub enum AudioPlayer {
 
 impl AudioPlayer {
     pub fn play(&self) -> Result<(), StreamError> {
+        if !self.is_safe() {
+            return Ok(());
+        }
         match self {
             AudioPlayer::Player2D(player) => {
                 let player = unsafe { player.assume_safe() };
@@ -25,6 +28,9 @@ impl AudioPlayer {
     }
 
     pub fn stop(&self) -> Result<(), StreamError> {
+        if !self.is_safe() {
+            return Ok(());
+        }
         match self {
             AudioPlayer::Player2D(player) => {
                 let player = unsafe { player.assume_safe() };
@@ -38,7 +44,17 @@ impl AudioPlayer {
         Ok(())
     }
 
+    pub fn is_safe(&self) -> bool {
+        match self {
+            AudioPlayer::Player2D(player) => unsafe { player.is_instance_sane() },
+            AudioPlayer::Player3D(player) => unsafe { player.is_instance_sane() },
+        }
+    }
+
     pub fn is_playing(&self) -> bool {
+        if !self.is_safe() {
+            return false;
+        }
         match self {
             AudioPlayer::Player2D(player) => {
                 let player = unsafe { player.assume_safe() };
