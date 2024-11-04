@@ -9,7 +9,7 @@ use gdnative::godot_print;
 
 use crate::{CREATE_NO_WINDOW, YT_DLP_URL};
 
-pub fn is_yt_dlp_installed(output_dir: impl AsRef<Path>) -> bool {
+fn is_yt_dlp_installed(output_dir: impl AsRef<Path>) -> bool {
     output_dir.as_ref().join("yt-dlp.exe").exists()
 }
 

@@ -10,18 +10,15 @@ pub enum StreamError {
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
 
-    #[error("AudioPlayer not initialized")]
-    AudioPlayerNotInitialized,
-
-    #[error("AudioStreamGeneratorPlayback not initialized")]
-    AudioStreamGeneratorPlaybackNotInitialized,
-
     #[error("Root path not set")]
     RootPathNotSet,
 
     #[error("Process error: {0}")]
     ProcessError(String),
 
-    #[error("Channel error: {0}")]
-    ChannelError(String),
+    #[error("Failed to download yt-dlp")]
+    YtDlpDownloadError(String),
+
+    #[error("Failed to download ffmpeg")]
+    FfmpegDownloadError(String),
 }

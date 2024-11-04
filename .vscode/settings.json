@@ -5,6 +5,7 @@
         "Deque",
         "descrambler",
         "gdnative",
+        "nanos",
         "reqwest",
         "sevenz",
         "thiserror",
