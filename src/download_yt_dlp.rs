@@ -17,6 +17,7 @@ pub fn download_yt_dlp(
     output_dir: impl AsRef<Path>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // check if yt-dlp is already downloaded
+    godot_print!("Checking if yt-dlp is already downloaded...");
     if is_yt_dlp_installed(output_dir.as_ref()) {
         // run yt-dlp update
 
@@ -41,11 +42,12 @@ pub fn download_yt_dlp(
     let output_dir = output_dir.as_ref();
 
     // download yt-dlp
+    godot_print!("Downloading yt-dlp...");
     let mut response = reqwest::blocking::get(YT_DLP_URL).expect("Failed to download yt-dlp");
 
     let mut file =
         File::create(output_dir.join("yt-dlp.exe")).expect("Failed to create yt-dlp.exe");
-
+    godot_print!("Writing yt-dlp to file...");
     std::io::copy(&mut response, &mut file).expect("Failed to copy yt-dlp");
 
     Ok(output_dir.join("yt-dlp.exe"))

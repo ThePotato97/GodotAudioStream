@@ -86,13 +86,16 @@ impl YTStream {
 
     #[method]
     fn set_root_path(&mut self, path: GodotString) -> bool {
-        let path = PathBuf::from(path.to_string());
-        if !path.exists() {
-            godot_error!("Root path does not exist: {:?}", path);
-            return false;
-        }
+        let path_string = path.to_string();
+        let path_buf = PathBuf::from(&path_string);
 
-        self.process_manager = Some(ProcessManager::new(path));
+        self.process_manager = Some(ProcessManager::new(path_buf.clone()));
+
+        self.process_manager
+            .as_mut()
+            .unwrap()
+            .set_root_path(path_buf);
+
         if let Err(e) = self
             .process_manager
             .as_mut()

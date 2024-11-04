@@ -6,6 +6,7 @@ use command_group::{CommandGroup, GroupChild};
 use gdnative::godot_print;
 
 use std::{
+    fs,
     io::{Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
@@ -35,7 +36,9 @@ impl ProcessManager {
             ytdlp_process: None,
         }
     }
-
+    pub fn set_root_path(&mut self, path: PathBuf) {
+        self.root_path = path;
+    }
     pub fn start_ffmpeg(&mut self) -> FFmpegStreamResult {
         let (audio_tx, audio_rx) = channel();
         let (ffmpeg_tx, ffmpeg_rx) = channel();
@@ -223,15 +226,19 @@ impl ProcessManager {
 
     pub fn download_dependencies(&mut self) -> Result<(), StreamError> {
         // check if root path is set
-        if self.root_path.as_path().exists() {
-            return Ok(());
+        godot_print!("Checking if root path is set..., {:?}", self.root_path);
+        godot_print!("Downloading yt-dlp...");
+        // make path if it doesn't exist
+        if !self.root_path.exists() {
+            fs::create_dir_all(&self.root_path)?;
         }
-        // download yt-dlp
         download_yt_dlp(self.root_path.as_path())
             .map_err(|e| StreamError::YtDlpDownloadError(e.to_string()))?;
         // download ffmpeg
+        godot_print!("Downloading ffmpeg...");
         download_ffmpeg(self.root_path.as_path())
             .map_err(|e| StreamError::FfmpegDownloadError(e.to_string()))?;
+
         Ok(())
     }
 
