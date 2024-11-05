@@ -1,5 +1,6 @@
 mod audio_player;
 mod audio_processor;
+mod checksum;
 mod download_ffmpeg;
 mod download_yt_dlp;
 mod process_manager;
@@ -26,9 +27,6 @@ const CHANNELS: u32 = 2;
 const DEFAULT_BUFFER_SIZE: i32 = 4096;
 #[allow(clippy::identity_op)]
 const DEFAULT_BUFFER_THRESHOLD: usize = SAMPLE_RATE as usize * 1; // 1 seconds
-
-const FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z";
-const YT_DLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 
 #[derive(NativeClass)]
 #[inherit(Node)]
@@ -94,13 +92,13 @@ impl YTStream {
         self.process_manager
             .as_mut()
             .unwrap()
-            .set_root_path(path_buf);
+            .set_root_path(path_buf.clone());
 
         if let Err(e) = self
             .process_manager
             .as_mut()
             .unwrap()
-            .download_dependencies()
+            .download_dependencies(path_buf)
         {
             godot_error!("Failed to download dependencies: {}", e);
             return false;
@@ -143,8 +141,10 @@ impl YTStream {
             .as_mut()
             .ok_or(StreamError::RootPathNotSet)?;
 
-        // Stop any existing playback
-
+        if !process_manager.is_initialized() {
+            godot_print!("Waiting for dependencies to initialize...");
+            return Ok(());
+        }
         // Start new playback
         let (ffmpeg_tx, audio_rx) = process_manager.start_ffmpeg()?;
         process_manager.start_ytdlp(url.as_str(), ffmpeg_tx.clone())?;

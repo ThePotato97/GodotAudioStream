@@ -1,76 +1,94 @@
 use std::{
     fs::File,
+    io::{BufWriter, Write},
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::Command,
-    thread::sleep,
+    thread,
     time::Duration,
 };
 
 use gdnative::godot_print;
 
-use crate::{CREATE_NO_WINDOW, YT_DLP_URL};
+use crate::{
+    checksum::{get_checksum_multiple, verify_checksum},
+    CREATE_NO_WINDOW,
+};
 
 const MAX_RETRIES: u8 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 
+const YT_DLP_BIN_NAME: &str = "yt-dlp.exe";
+const YT_DLP_CHECKSUM_URL: &str =
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS";
+const YT_DLP_DOWNLOAD_URL: &str =
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+
 fn is_yt_dlp_installed(output_dir: impl AsRef<Path>) -> bool {
-    output_dir.as_ref().join("yt-dlp.exe").exists()
+    output_dir.as_ref().join(YT_DLP_BIN_NAME).exists()
+}
+
+fn update_yt_dlp(output_dir: impl AsRef<Path>) -> Result<(), Box<dyn std::error::Error>> {
+    godot_print!("yt-dlp is already downloaded - checking for updates...");
+
+    let output = Command::new("yt-dlp")
+        .arg("-U")
+        .current_dir(output_dir.as_ref())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "Failed to update yt-dlp: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+
+    godot_print!("yt-dlp updated successfully");
+    Ok(())
 }
 
 pub fn download_yt_dlp(
     output_dir: impl AsRef<Path>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // check if yt-dlp is already downloaded
-    godot_print!("Checking if yt-dlp is already downloaded...");
-    if is_yt_dlp_installed(output_dir.as_ref()) {
-        // run yt-dlp update
-        godot_print!("yt-dlp is already downloaded - updating...");
-        let output = Command::new("yt-dlp")
-            .arg("-U")
-            .current_dir(output_dir.as_ref())
-            .creation_flags(CREATE_NO_WINDOW) // Apply creation flags here
-            .output()?;
-
-        if !output.status.success() {
-            return Err(format!(
-                "Failed to update yt-dlp: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
-        }
-
-        godot_print!("yt-dlp updated successfully");
-        return Ok(output_dir.as_ref().join("yt-dlp.exe"));
-    }
-
     let output_dir = output_dir.as_ref();
 
-    // download yt-dlp
-    let mut retries = 0;
-    while retries < MAX_RETRIES {
-        match reqwest::blocking::get(YT_DLP_URL) {
-            Ok(mut response) => {
-                let mut file = File::create(output_dir.join("yt-dlp.exe"))?;
-                godot_print!("Writing yt-dlp to file...");
-                std::io::copy(&mut response, &mut file)?;
-                return Ok(output_dir.join("yt-dlp.exe"));
+    if is_yt_dlp_installed(output_dir) {
+        let checksum = get_checksum_multiple(YT_DLP_CHECKSUM_URL, YT_DLP_BIN_NAME)?;
+
+        match verify_checksum(&output_dir.join(YT_DLP_BIN_NAME), &checksum) {
+            Ok(_) => {
+                update_yt_dlp(output_dir)?;
+                return Ok(output_dir.join(YT_DLP_BIN_NAME));
             }
             Err(e) => {
-                retries += 1;
-                godot_print!("Download attempt {} failed: {}", retries, e);
-                if retries < MAX_RETRIES {
-                    godot_print!("Retrying in {} seconds...", RETRY_DELAY.as_secs());
-                    sleep(RETRY_DELAY);
-                } else {
-                    return Err(format!(
-                        "Failed to download yt-dlp after {} attempts: {}",
-                        retries, e
-                    )
-                    .into());
-                }
+                godot_print!("Checksum verification failed: {}", e);
+                std::fs::remove_file(output_dir.join(YT_DLP_BIN_NAME))?; // Remove corrupted file
             }
         }
     }
-    Err("Unexpected error in download retry loop.".into())
+
+    godot_print!("Downloading yt-dlp");
+
+    // Download checksum first
+    let checksum = get_checksum_multiple(YT_DLP_CHECKSUM_URL, YT_DLP_BIN_NAME)?;
+
+    // Download yt-dlp
+    let mut download_response = reqwest::blocking::get(YT_DLP_DOWNLOAD_URL)?;
+    let yt_dlp_path = output_dir.join(YT_DLP_BIN_NAME);
+
+    let mut file = BufWriter::new(File::create(&yt_dlp_path)?); // Buffered writer for efficiency
+    download_response.copy_to(&mut file)?;
+    file.flush()?; // Ensure all data is written
+    drop(file); // Close the file
+
+    match verify_checksum(&yt_dlp_path, &checksum) {
+        Ok(_) => return Ok(yt_dlp_path),
+        Err(e) => {
+            godot_print!("Checksum verification failed: {}", e);
+            std::fs::remove_file(&yt_dlp_path)?; // Remove corrupted file
+        }
+    }
+    Err("Failed to download yt-dlp".into())
 }

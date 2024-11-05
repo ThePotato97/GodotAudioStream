@@ -23,6 +23,7 @@ const TIMEOUT_DURATION: Duration = Duration::from_secs(20);
 type FFmpegStreamResult = Result<(Sender<Vec<u8>>, Receiver<Vec<f32>>), StreamError>;
 
 pub struct ProcessManager {
+    initialized: Arc<AtomicBool>,
     root_path: PathBuf,
     ffmpeg_process: Option<GroupChild>,
     ytdlp_process: Option<GroupChild>,
@@ -31,11 +32,17 @@ pub struct ProcessManager {
 impl ProcessManager {
     pub fn new(root_path: PathBuf) -> Self {
         Self {
+            initialized: Arc::new(AtomicBool::new(false)),
             root_path,
             ffmpeg_process: None,
             ytdlp_process: None,
         }
     }
+
+    pub fn is_initialized(&self) -> bool {
+        self.initialized.load(Ordering::Relaxed)
+    }
+
     pub fn set_root_path(&mut self, path: PathBuf) {
         self.root_path = path;
     }
@@ -224,25 +231,37 @@ impl ProcessManager {
         Ok(())
     }
 
-    pub fn download_dependencies(&mut self) -> Result<(), StreamError> {
+    pub fn download_dependencies(&mut self, root_path: PathBuf) -> Result<(), StreamError> {
         // Check if root path is set
-        godot_print!("Checking if root path is set..., {:?}", self.root_path);
+        godot_print!("Checking if root path is set..., {:?}", root_path);
 
         // Make path if it doesn't exist
-        if !self.root_path.exists() {
-            fs::create_dir_all(&self.root_path)?;
+        if !root_path.exists() {
+            fs::create_dir_all(&root_path)?;
         }
+        let initialized_clone = self.initialized.clone();
 
-        // Attempt to download yt-dlp
-        godot_print!("Downloading yt-dlp...");
-        if let Err(e) = download_yt_dlp(self.root_path.as_path()) {
-            godot_print!("Failed to download yt-dlp: {:?}", e);
-        }
-
-        // Attempt to download ffmpeg, regardless of yt-dlp success
-        godot_print!("Downloading ffmpeg...");
-        download_ffmpeg(self.root_path.as_path())
-            .map_err(|e| StreamError::FfmpegDownloadError(e.to_string()))?;
+        thread::Builder::new()
+            .name("download_dependencies".to_string())
+            .spawn(move || {
+                // Attempt to download yt-dlp
+                godot_print!("Downloading yt-dlp...");
+                if let Err(e) = download_yt_dlp(root_path.as_path()) {
+                    godot_print!("Failed to download yt-dlp: {:?}", e);
+                }
+                // Attempt to download ffmpeg, regardless of yt-dlp success
+                godot_print!("Downloading ffmpeg...");
+                if let Err(e) = download_ffmpeg(root_path.as_path()) {
+                    godot_print!("Failed to download ffmpeg: {:?}", e);
+                }
+                initialized_clone.store(true, Ordering::Relaxed);
+            })
+            .map_err(|e| {
+                StreamError::ProcessError(format!(
+                    "Failed to spawn download_dependencies thread: {}",
+                    e
+                ))
+            })?;
 
         Ok(())
     }
