@@ -1,3 +1,5 @@
+use gdnative::godot_print;
+use reqwest::blocking::ClientBuilder;
 use std::{
     fs::File,
     io::{BufWriter, Write},
@@ -7,9 +9,7 @@ use std::{
     thread,
     time::Duration,
 };
-
-use gdnative::godot_print;
-
+use anyhow::{Context, Result};   
 use crate::{
     checksum::{get_checksum_multiple, verify_checksum},
     CREATE_NO_WINDOW,
@@ -54,6 +54,11 @@ pub fn download_yt_dlp(
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let output_dir = output_dir.as_ref();
 
+    let client = ClientBuilder::new()
+        .use_rustls_tls()
+        .build()
+        .context("Failed to build reqwest client")?;
+
     if is_yt_dlp_installed(output_dir) {
         let checksum = get_checksum_multiple(YT_DLP_CHECKSUM_URL, YT_DLP_BIN_NAME)?;
 
@@ -75,7 +80,11 @@ pub fn download_yt_dlp(
     let checksum = get_checksum_multiple(YT_DLP_CHECKSUM_URL, YT_DLP_BIN_NAME)?;
 
     // Download yt-dlp
-    let mut download_response = reqwest::blocking::get(YT_DLP_DOWNLOAD_URL)?;
+    let mut download_response = client // Use the client
+        .get(YT_DLP_DOWNLOAD_URL)
+        .send()
+        .context("Failed to download yt-dlp")?;
+
     let yt_dlp_path = output_dir.join(YT_DLP_BIN_NAME);
 
     let mut file = BufWriter::new(File::create(&yt_dlp_path)?); // Buffered writer for efficiency

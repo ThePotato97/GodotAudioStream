@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use gdnative::godot_print;
 
+use reqwest::blocking::ClientBuilder;
 use sevenz_rust::{Error as SzError, Password, SevenZReader};
-
 use std::fs;
 use std::fs::File;
 use std::io;
@@ -14,6 +14,11 @@ const FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-esse
 
 pub fn download_ffmpeg(output_dir: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
     let output_dir = output_dir.as_ref();
+
+    let client = ClientBuilder::new()
+        .use_rustls_tls()
+        .build()
+        .context("Failed to build reqwest client")?;
 
     let executables = ["ffmpeg.exe", "ffprobe.exe"];
     let expected_paths: Vec<PathBuf> = executables.iter().map(|exe| output_dir.join(exe)).collect();
@@ -36,10 +41,13 @@ pub fn download_ffmpeg(output_dir: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
 
     // Verify checksum
     godot_print!("Verifying checksum...");
-    let checksum = reqwest::blocking::get(format!("{}.sha256", FFMPEG_URL))
-        .context("Failed to download checksum")?
-        .text()
-        .context("Failed to read checksum")?;
+    let mut response = client // Use the client
+    .get(format!("{}.sha256", FFMPEG_URL))
+    .send()
+    .context("Failed to fetch checksum")?;
+
+    let checksum = response.text()?;
+
     match verify_checksum(&archive_path, &checksum) {
         Ok(_) => {
             godot_print!("Checksum verified successfully");
@@ -116,9 +124,16 @@ fn extract_executables(archive_path: &Path, output_dir: &Path, executables: &[&s
 }
 
 fn download_archive(archive_path: &Path) -> Result<u64> {
+    let client = ClientBuilder::new()
+        .use_rustls_tls()
+        .build()
+        .context("Failed to build reqwest client")?;
+
     let mut file = fs::File::create(archive_path).context("Failed to create archive file")?;
-    let mut response =
-        reqwest::blocking::get(FFMPEG_URL).context("Failed to download FFmpeg archive")?;
+    let mut response = client
+        .get(FFMPEG_URL)
+        .send()
+        .context("Failed to download FFmpeg archive")?;
 
     if !response.status().is_success() {
         return Err(anyhow::anyhow!(

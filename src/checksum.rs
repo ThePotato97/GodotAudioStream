@@ -1,6 +1,7 @@
 use std::{fs::File, path::Path};
-
+use reqwest::blocking::ClientBuilder;
 use sha2::{Digest, Sha256};
+use anyhow::{Context, Result};   
 
 pub fn verify_checksum(
     file_path: &Path,
@@ -27,7 +28,17 @@ pub fn get_checksum_multiple(
     url: &str,
     binary_name: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let response = reqwest::blocking::get(url)?;
+    let client = ClientBuilder::new()
+        .use_rustls_tls()
+        .build()
+        .context("Failed to build reqwest client")?;
+
+
+    let mut response = client // Use the client
+        .get(url)
+        .send()
+        .context("Failed to fetch checksum")?;
+
     let checksum = response
         .text()?
         .lines()
