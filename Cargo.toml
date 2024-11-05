@@ -13,12 +13,8 @@ parking_lot = "0.12"
 futures-util = "0.3.31"
 reqwest = { version = "0.12.9", features = ["stream", "blocking"] }
 tokio = { version = "1.41.0", features = ["full"] }
-regex = "1.11.1"
 sevenz-rust = "0.5"
-walkdir = "2.3"
 url = "2.4.0"
-tempfile = "3.2"
 thiserror = "1.0.66"
 command-group = "5.0.1"
 sha2 = "0.10.8"
-retry = "2.0.0"
