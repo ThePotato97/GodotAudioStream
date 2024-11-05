@@ -225,16 +225,21 @@ impl ProcessManager {
     }
 
     pub fn download_dependencies(&mut self) -> Result<(), StreamError> {
-        // check if root path is set
+        // Check if root path is set
         godot_print!("Checking if root path is set..., {:?}", self.root_path);
-        godot_print!("Downloading yt-dlp...");
-        // make path if it doesn't exist
+
+        // Make path if it doesn't exist
         if !self.root_path.exists() {
             fs::create_dir_all(&self.root_path)?;
         }
-        download_yt_dlp(self.root_path.as_path())
-            .map_err(|e| StreamError::YtDlpDownloadError(e.to_string()))?;
-        // download ffmpeg
+
+        // Attempt to download yt-dlp
+        godot_print!("Downloading yt-dlp...");
+        if let Err(e) = download_yt_dlp(self.root_path.as_path()) {
+            godot_print!("Failed to download yt-dlp: {:?}", e);
+        }
+
+        // Attempt to download ffmpeg, regardless of yt-dlp success
         godot_print!("Downloading ffmpeg...");
         download_ffmpeg(self.root_path.as_path())
             .map_err(|e| StreamError::FfmpegDownloadError(e.to_string()))?;
