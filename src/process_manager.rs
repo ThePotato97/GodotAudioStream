@@ -3,17 +3,20 @@ use crate::{
     CHANNELS, CREATE_NO_WINDOW, DEFAULT_BUFFER_SIZE, SAMPLE_RATE,
 };
 use command_group::{CommandGroup, GroupChild};
-use gdnative::godot_print;
+use gdnative::{derive::ToVariant, godot_print};
+
+use serde::Deserialize;
 
 use std::{
+    error::Error,
     fs,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{channel, Receiver, Sender},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -22,11 +25,21 @@ use std::{
 const TIMEOUT_DURATION: Duration = Duration::from_secs(20);
 type FFmpegStreamResult = Result<(Sender<Vec<u8>>, Receiver<Vec<f32>>), StreamError>;
 
+#[derive(Debug, Deserialize, Clone, ToVariant)]
+pub struct YtDlpMetadata {
+    pub title: String,
+    pub uploader: Option<String>, // Option used if the field might be missing
+    pub duration: Option<u64>,    // Duration in seconds, if applicable
+    pub webpage_url: Option<String>,
+    pub thumbnail: Option<String>,
+}
+
 pub struct ProcessManager {
     initialized: Arc<AtomicBool>,
     root_path: PathBuf,
     ffmpeg_process: Option<GroupChild>,
     ytdlp_process: Option<GroupChild>,
+    pub ytdlp_metadata: Arc<Mutex<Option<YtDlpMetadata>>>,
 }
 
 impl ProcessManager {
@@ -36,6 +49,7 @@ impl ProcessManager {
             root_path,
             ffmpeg_process: None,
             ytdlp_process: None,
+            ytdlp_metadata: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -180,7 +194,64 @@ impl ProcessManager {
 
         Ok(())
     }
+    pub fn get_ytdlp_metadata(&self, url: &str) {
+        let ytdlp_path: PathBuf = self.root_path.join("yt-dlp");
+        let metadata_store = Arc::clone(&self.ytdlp_metadata);
+        let root_path = self.root_path.clone();
+        let url = url.to_string();
 
+        thread::spawn(move || {
+            let mut ytdlp = Command::new(ytdlp_path)
+                .args([
+                    "--dump-json",
+                    "--ignore-errors",
+                    "--quiet",
+                    "--playlist-items",
+                    "1",
+                    &url,
+                ])
+                .current_dir(&root_path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .group()
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| eprintln!("Failed to start yt-dlp: {}", e))
+                .ok()?;
+
+            let stdout = ytdlp.inner().stdout.take()?;
+            let reader = BufReader::new(stdout);
+            let mut metadata = String::new();
+
+            for line in reader.lines() {
+                match line {
+                    Ok(chunk) => metadata.push_str(&chunk),
+                    Err(e) => {
+                        godot_print!("Error reading yt-dlp output: {}", e);
+                        return None;
+                    }
+                }
+            }
+
+            // Parse the JSON output
+            let parsed_metadata: YtDlpMetadata = match serde_json::from_str(&metadata) {
+                Ok(data) => data,
+                Err(e) => {
+                    godot_print!("Failed to parse metadata as JSON: {}", e);
+                    return None;
+                }
+            };
+
+            // Store the parsed metadata in the Arc<Mutex<Option<YtDlpMetadata>>>
+            if let Ok(mut meta_lock) = metadata_store.lock() {
+                *meta_lock = Some(parsed_metadata);
+            } else {
+                godot_print!("Failed to acquire lock to store metadata");
+            }
+
+            Some(())
+        });
+    }
     pub fn start_ytdlp(
         &mut self,
         url: &str,

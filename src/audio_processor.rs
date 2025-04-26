@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 pub struct AudioProcessor {
     pub buffer: VecDeque<f32>,
     buffer_size: i32,
+    pub samples_processed: usize,
     last_process_time: Instant,
     process_interval: Duration,
     pub buffer_threshold: usize,
@@ -17,6 +18,7 @@ impl AudioProcessor {
         Self {
             buffer: VecDeque::new(),
             buffer_size,
+            samples_processed: 0,
             buffer_threshold,
             last_process_time: Instant::now(),
             process_interval: Duration::from_micros(5000),
@@ -25,6 +27,7 @@ impl AudioProcessor {
 
     pub fn clear_buffer(&mut self) {
         self.buffer.clear();
+        self.samples_processed = 0;
     }
 
     pub fn process_samples(
@@ -70,6 +73,7 @@ impl AudioProcessor {
 
         // Process samples in chunks
         for _ in (0..samples_to_process).step_by(2) {
+            self.samples_processed += 1;
             let left = self.buffer.pop_front().unwrap_or(0.0);
             let right = self.buffer.pop_front().unwrap_or(left);
             frames.push(Vector2::new(left, right));

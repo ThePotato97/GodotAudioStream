@@ -11,7 +11,7 @@ use audio_processor::AudioProcessor;
 use gdnative::api::AudioStreamGeneratorPlayback;
 use gdnative::prelude::*;
 
-use process_manager::ProcessManager;
+use process_manager::{ProcessManager, YtDlpMetadata};
 use std::backtrace::Backtrace;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -125,6 +125,20 @@ impl YTStream {
         }
     }
 
+    #[method]
+    fn get_playback_position(&self) -> f64 {
+        return self.audio_processor.lock().unwrap().samples_processed as f64 / SAMPLE_RATE as f64;
+    }
+
+    #[method]
+    fn get_current_playback_metadata(&self) -> Option<YtDlpMetadata> {
+        let metadata = self.process_manager.as_ref().unwrap();
+        if let Ok(meta_lock) = metadata.ytdlp_metadata.lock() {
+            return meta_lock.clone();
+        }
+        None
+    }
+
     fn play_youtube_audio_internal(&mut self, url: &str) -> Result<(), StreamError> {
         // Validate URL
         let url = Url::parse(url).map_err(|_| StreamError::InvalidUrl(url.to_string()))?;
@@ -140,6 +154,20 @@ impl YTStream {
             .process_manager
             .as_mut()
             .ok_or(StreamError::RootPathNotSet)?;
+
+        // TODO: Re-enable this once we switch to async tokio
+
+        // // get metadata and make sure it's valid before starting playback
+        // let metadata = process_manager
+        //     .get_ytdlp_metadata(url.as_str())
+        //     .map_err(|e| {
+        //         godot_print!("Failed to get metadata: {}", e);
+        //         StreamError::InvalidUrl(e.to_string())
+        //     })?;
+
+        // self.current_playback_metadata = Some(metadata.clone());
+
+        process_manager.get_ytdlp_metadata(url.as_str());
 
         if !process_manager.is_initialized() {
             godot_print!("Waiting for dependencies to initialize...");
